@@ -1,6 +1,6 @@
 const fs=require('fs');const h=fs.readFileSync(__dirname+'/index.html','utf8');
 const code=h.match(/<script id="physics">([\s\S]*?)<\/script>/)[1];const m={exports:{}};new Function('module',code)(m);
-const {makeSim,step,stats,S,disp}=m.exports;
+const {sphereMap,sphereTangent,makeSim,step,stats,S,disp}=m.exports;
 // 1 no interaction
 let s=makeSim({N:200,L:50,R0:1,v0:1.5,d:0.3,F0:0,tau:1,dt:0.01,topo:'torus'});for(let i=0;i<1500;i++)step(s);
 let mx=0;for(let i=0;i<s.N;i++)mx=Math.max(mx,Math.abs(Math.hypot(s.vx[i],s.vy[i])-1.5));console.log('speed max dev from v0:',mx);
@@ -38,3 +38,9 @@ for(const topo of ['mobius','sphere']){const s=makeSim({N:2000,L:45,R0:1,v0:1,d:
 for(const topo of ['torus','klein']){s=makeSim({N:3000,L:60,R0:1,v0:1,d:0.3,F0:10,tau:1,dt:0.01,topo});const t0=Date.now();for(let i=0;i<300;i++)step(s);
  let bad=0;for(let i=0;i<s.N;i++)if(!isFinite(s.x[i]+s.y[i]+s.vx[i]+s.vy[i])||s.x[i]<0||s.x[i]>=60||s.y[i]<0||s.y[i]>=60)bad++;
  console.log(topo,'N=3000 300 steps',((Date.now()-t0)/300).toFixed(1)+'ms/step, bad:',bad,stats(s));}
+
+let me=0;for(let k=0;k<=1000;k++){const tt=10*k/1000,a=sphereMap(0,tt,10),b=sphereMap(tt,0,10),c=sphereMap(10,tt,10),d=sphereMap(tt,10,10);me=Math.max(me,Math.hypot(a[0]-b[0],a[1]-b[1],a[2]-b[2]),Math.hypot(c[0]-d[0],c[1]-d[1],c[2]-d[2]));}
+console.log('sphereMap glue consistency max err:',me.toExponential(2));
+let mc=0;for(let k=0;k<20000;k++){const x=Math.random()*10,y=Math.random()*10,a=Math.random()*7,h=1e-3,X=x+h*Math.cos(a),Y=y+h*Math.sin(a);if(X<0||X>10||Y<0||Y>10)continue;const p=sphereMap(x,y,10),q=sphereMap(X,Y,10);mc=Math.max(mc,Math.hypot(p[0]-q[0],p[1]-q[1],p[2]-q[2]));}
+console.log('sphereMap local continuity max |df| for |dp|=1e-3:',mc.toExponential(2));
+let nn=0;for(let k=0;k<1000;k++){const t3=sphereTangent(Math.random()*10,Math.random()*10,1,0.3,10);if(!t3.every(isFinite))nn++;}console.log('tangent NaNs:',nn);

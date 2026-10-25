@@ -17,7 +17,7 @@ label{display:block;margin:6px 0}input[type=number]{width:80px}canvas{background
 <div class="f">dx/dt = v<br>dv/dt = (v0-|v|)/τ · v/|v| + Σ F0·S(r_ij)·e_ij<br><br>
 S(r)=[σ((c-r)/w) - σ((c-R0)/w)] / [σ(c/w) - σ((c-R0)/w)]<br>σ(z)=1/(1+e^-z), c=R0-d/2, w=d/4<br>S=0 for r≥R0; d=0 → S=Θ(R0-r)<br>
 S(0)=1, S(R0)=0; d=R0 → ≈ linear<br><br>'Klein bottle' option: both axes flipped —<br>crossing x: y→L-y, vy→-vy; crossing y: x→L-x, vx→-vx<br>(topologically the real projective plane)<br>Möbius: crossing x: y→L-y, vy→-vy; hard reflecting walls at y=0,L<br>Sphere: (0,t)~(t,0), (L,t)~(t,L); flat square with glued edges (topological sphere, not curved); corners (0,0),(L,L) are cone points<br>Semi-implicit Euler, cell list</div>
-</div><canvas id="c" width="800" height="800"></canvas>
+</div><canvas id="c" width="800" height="800"></canvas><canvas id="c3" width="600" height="600" style="display:none;cursor:grab"></canvas>
 <script id="physics">
 function makeSim(p){
  const s={p, N:p.N, x:new Float64Array(p.N), y:new Float64Array(p.N), vx:new Float64Array(p.N), vy:new Float64Array(p.N), t:0};
@@ -46,7 +46,7 @@ const groupCache={};
 function group(L,topo){const k=topo+L;if(groupCache[k])return groupCache[k];
  const G0=gens(L,topo),out=[aff([1,0,0,1],[0,0])],key=g=>g.A.concat(g.b).map(v=>Math.round(v*1e6)).join(),seen=new Set([key(out[0])]);
  const add=g=>{const kk=key(g);if(!seen.has(kk)){seen.add(kk);out.push(g);}};
- for(const g of G0){add(g);for(const h of G0)add(comp(g,h));}
+ for(const g of G0){add(g);for(const h of G0){const gh=comp(g,h);add(gh);if(topo==='sphere')for(const q of G0)add(comp(gh,q));}}
  return groupCache[k]=out;}
 const ap=(g,x,y)=>[g.A[0]*x+g.A[1]*y+g.b[0],g.A[2]*x+g.A[3]*y+g.b[1]];
 const apInv=(g,x,y)=>{const u=x-g.b[0],w=y-g.b[1];return [g.A[0]*u+g.A[2]*w,g.A[1]*u+g.A[3]*w];};
@@ -88,7 +88,15 @@ function step(s){
  s.t+=dt;}
 function stats(s){let ux=0,uy=0,m=0;for(let i=0;i<s.N;i++){const sp=Math.hypot(s.vx[i],s.vy[i]);m+=sp;if(sp>0){ux+=s.vx[i]/sp;uy+=s.vy[i]/sp;}}
  return {phi:Math.hypot(ux,uy)/s.N,mean:m/s.N};}
-if(typeof module!=='undefined')module.exports={makeSim,step,stats,S,disp,wrap};
+// Continuous map glued square -> S^2: theta = pi*(x+y)/(2L) (poles = cone points (0,0),(L,L));
+// on level line s=x+y: phi = 2pi*x/s (s<=L) or 2pi*(x-(s-L))/(2L-s) (s>L). Glued edge points map to same phi (0 ~ 2pi).
+function sphereMap(x,y,L){const sm=x+y,th=Math.PI*sm/(2*L);let ph;
+ if(sm<=L)ph=sm>1e-12?2*Math.PI*x/sm:0;else{const w=2*L-sm;ph=w>1e-12?2*Math.PI*(x-(sm-L))/w:0;}
+ const st=Math.sin(th);return [st*Math.cos(ph),st*Math.sin(ph),Math.cos(th)];}
+function sphereTangent(x,y,vx,vy,L){const sp=Math.hypot(vx,vy)||1,h=1e-4*L,ux=vx/sp,uy=vy/sp;let sg=1,X=x+h*ux,Y=y+h*uy;
+ if(X<0||X>L||Y<0||Y>L){X=x-h*ux;Y=y-h*uy;sg=-1;}const a=sphereMap(x,y,L),b=sphereMap(X,Y,L),t=[sg*(b[0]-a[0]),sg*(b[1]-a[1]),sg*(b[2]-a[2])],n=Math.hypot(...t)||1;
+ return t.map(v=>v/n);}
+if(typeof module!=='undefined')module.exports={sphereMap,sphereTangent,makeSim,step,stats,S,disp,wrap};
 </script>
 <script>
 const $=id=>document.getElementById(id),cv=$('c'),ctx=cv.getContext('2d');let sim,run=false;
@@ -104,5 +112,24 @@ function draw(){const k=cv.width/sim.p.L;ctx.clearRect(0,0,cv.width,cv.height);c
   ctx.beginPath();ctx.moveTo(X,Y);ctx.lineTo(T,U);ctx.moveTo(T,U);ctx.lineTo(T-h*(c-0.5*s_),U-h*(s_+0.5*c));ctx.moveTo(T,U);ctx.lineTo(T-h*(c+0.5*s_),U-h*(s_-0.5*c));ctx.stroke();}
  const st=stats(sim);$('t').textContent=sim.t.toFixed(2);$('phi').textContent=st.phi.toFixed(3);$('ms').textContent=st.mean.toFixed(3);}
 function loop(){if(run){for(let i=0;i<+$('speed').value;i++)step(sim);draw();}requestAnimationFrame(loop);}
+const c3=$('c3'),g3=c3.getContext('2d');let rotA=0.5,rotB=0.3,drag=null;
+c3.onmousedown=e=>drag=[e.clientX,e.clientY];window.onmouseup=()=>drag=null;
+window.onmousemove=e=>{if(!drag)return;rotA+=(e.clientX-drag[0])*0.01;rotB+=(e.clientY-drag[1])*0.01;drag=[e.clientX,e.clientY];};
+function R3(p){const ca=Math.cos(rotA),sa=Math.sin(rotA),cb=Math.cos(rotB),sb=Math.sin(rotB);const x=ca*p[0]+sa*p[1],y=-sa*p[0]+ca*p[1];return [x,cb*p[2]-sb*y,sb*p[2]+cb*y];} // returns [sx,sy,depth]
+function draw3(){const on=sim.p.topo==='sphere';c3.style.display=on?'':'none';if(!on)return;if(!drag&&run)rotA+=0.003;
+ const W=c3.width,Rr=W*0.42,cx=W/2,cy=W/2,P=p=>{const q=R3(p);return [cx+Rr*q[0],cy-Rr*q[1],q[2]];};g3.clearRect(0,0,W,W);
+ const gr=g3.createRadialGradient(cx-Rr*0.3,cy-Rr*0.3,Rr*0.1,cx,cy,Rr);gr.addColorStop(0,'rgba(90,110,150,0.55)');gr.addColorStop(1,'rgba(20,25,45,0.55)');
+ g3.fillStyle=gr;g3.beginPath();g3.arc(cx,cy,Rr,0,7);g3.fill();
+ const line=pts=>{for(let k=1;k<pts.length;k++){const a=P(pts[k-1]),b=P(pts[k]);g3.strokeStyle=(a[2]+b[2])>0?'rgba(200,210,255,0.45)':'rgba(200,210,255,0.1)';g3.beginPath();g3.moveTo(a[0],a[1]);g3.lineTo(b[0],b[1]);g3.stroke();}};
+ g3.lineWidth=1;for(let i=1;i<12;i++){const th=Math.PI*i/12,pts=[];for(let k=0;k<=64;k++){const ph=2*Math.PI*k/64;pts.push([Math.sin(th)*Math.cos(ph),Math.sin(th)*Math.sin(ph),Math.cos(th)]);}line(pts);}
+ for(let j=0;j<12;j++){const ph=Math.PI*j/6,pts=[];for(let k=0;k<=32;k++){const th=Math.PI*k/32;pts.push([Math.sin(th)*Math.cos(ph),Math.sin(th)*Math.sin(ph),Math.cos(th)]);}line(pts);}
+ const L=sim.p.L,r=Math.max(1.5,Rr*Math.PI*sim.p.R0/(2*L)/2),items=[];
+ for(let i=0;i<sim.N;i++){const p=sphereMap(sim.x[i],sim.y[i],L),t=sphereTangent(sim.x[i],sim.y[i],sim.vx[i],sim.vy[i],L),a=P(p),b=P([p[0]+t[0]*2.5*r/Rr,p[1]+t[1]*2.5*r/Rr,p[2]+t[2]*2.5*r/Rr]);items.push([a,b]);}
+ items.sort((u,v)=>u[0][2]-v[0][2]);
+ for(const [a,b] of items){const f=a[2]>=0,sh=0.5+0.5*Math.max(0,a[2]);g3.globalAlpha=f?1:0.15;g3.fillStyle=`rgb(${68*sh+40|0},${170*sh+40|0},${255*sh|0})`;
+  g3.beginPath();g3.arc(a[0],a[1],r,0,7);g3.fill();g3.strokeStyle='#fff';const dx=b[0]-a[0],dy=b[1]-a[1],l=Math.hypot(dx,dy)||1,ux=dx/l,uy=dy/l,h=Math.max(2,0.6*r);
+  g3.beginPath();g3.moveTo(a[0],a[1]);g3.lineTo(b[0],b[1]);g3.lineTo(b[0]-h*(ux-0.5*uy),b[1]-h*(uy+0.5*ux));g3.moveTo(b[0],b[1]);g3.lineTo(b[0]-h*(ux+0.5*uy),b[1]-h*(uy-0.5*ux));g3.stroke();}
+ g3.globalAlpha=1;g3.fillStyle='#f55';g3.fillText('3D view: poles = cone points (0,0),(L,L); diagonal (0,L)-(L,0) = equator. Drag to rotate.',5,12);}
+(function l3(){if(sim)draw3();requestAnimationFrame(l3);})();
 $('start').onclick=()=>run=true;$('pause').onclick=()=>run=false;$('reset').onclick=reset;reset();loop();
 </script></body></html>
