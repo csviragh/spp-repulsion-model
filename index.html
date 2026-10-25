@@ -16,7 +16,7 @@ label{display:block;margin:6px 0}input[type=number]{width:80px}canvas{background
 <p>t = <span id="t">0</span><br>Order parameter φ = |⟨v/|v|⟩| = <span id="phi"></span><br>Mean speed ⟨|v|⟩ = <span id="ms"></span></p>
 <div class="f">dx/dt = v<br>dv/dt = (v0-|v|)/τ · v/|v| + Σ F0·S(r_ij)·e_ij<br><br>
 S(r)=[σ((c-r)/w) - σ((c-R0)/w)] / [σ(c/w) - σ((c-R0)/w)]<br>σ(z)=1/(1+e^-z), c=R0-d/2, w=d/4<br>S=0 for r≥R0; d=0 → S=Θ(R0-r)<br>
-S(0)=1, S(R0)=0; d=R0 → ≈ linear<br><br>Klein: crossing y wall: x→L-x, vx→-vx<br>Semi-implicit Euler, cell list</div>
+S(0)=1, S(R0)=0; d=R0 → ≈ linear<br><br>'Klein bottle' option: both axes flipped —<br>crossing x: y→L-y, vy→-vy; crossing y: x→L-x, vx→-vx<br>(topologically the real projective plane)<br>Semi-implicit Euler, cell list</div>
 </div><canvas id="c" width="800" height="800"></canvas>
 <script id="physics">
 function makeSim(p){
@@ -29,19 +29,25 @@ const sig=z=>1/(1+Math.exp(-z));
 function S(r,R0,d){ if(r>=R0) return 0; if(d<=1e-9) return 1;
  const c=R0-d/2,w=d/4,lo=sig((c-R0)/w),hi=sig(c/w); return (sig((c-r)/w)-lo)/(hi-lo);}
 // minimum-image displacement from j to i; returns [dx,dy]
+// 'klein' option = both axes flipped: (x,y)~(x±L, L-y) and (x,y)~(L-x, y±L)  (real projective plane)
 function disp(xi,yi,xj,yj,L,topo){
- let best=Infinity,bx=0,by=0;
- const cand=(X,Y)=>{let dx=xi-X;dx-=L*Math.round(dx/L);const dy=yi-Y,r2=dx*dx+dy*dy;if(r2<best){best=r2;bx=dx;by=dy;}};
  if(topo==='torus'){let dx=xi-xj,dy=yi-yj;dx-=L*Math.round(dx/L);dy-=L*Math.round(dy/L);return [dx,dy];}
- cand(xj,yj); cand(L-xj,yj+L); cand(L-xj,yj-L);
+ const G=[[1,0],[-1,0],[0,1],[0,-1]],ap=(p,g)=>g[0]?[p[0]+g[0]*L,L-p[1]]:[L-p[0],p[1]+g[1]*L];
+ let best=Infinity,bx=0,by=0;const test=p=>{const dx=xi-p[0],dy=yi-p[1],r2=dx*dx+dy*dy;if(r2<best){best=r2;bx=dx;by=dy;}};
+ const p0=[xj,yj];test(p0);for(const g of G){const p1=ap(p0,g);test(p1);for(const h of G)test(ap(p1,h));}
  return [bx,by];
 }
-function wrap(s,i){const L=s.p.L;
- s.x[i]-=L*Math.floor(s.x[i]/L);
- if(s.y[i]>=L||s.y[i]<0){const k=Math.floor(s.y[i]/L);s.y[i]-=k*L;
-  if(s.p.topo==='klein'&&(k&1)){s.x[i]=L-s.x[i];s.vx[i]=-s.vx[i];if(s.x[i]>=L)s.x[i]-=L;}}
- if(s.x[i]>=L)s.x[i]=0;if(s.y[i]>=L)s.y[i]=0;
+function wrap(s,i){const L=s.p.L,k=s.p.topo==='klein';
+ for(let it=0;it<8;it++){let ch=false;
+  if(s.x[i]<0||s.x[i]>=L){s.x[i]-=L*Math.floor(s.x[i]/L);if(k){s.y[i]=L-s.y[i];s.vy[i]=-s.vy[i];}ch=true;}
+  if(s.y[i]<0||s.y[i]>=L){s.y[i]-=L*Math.floor(s.y[i]/L);if(k){s.x[i]=L-s.x[i];s.vx[i]=-s.vx[i];}ch=true;}
+  if(!ch)break;}
+ if(s.x[i]>=L||s.x[i]<0)s.x[i]=0;if(s.y[i]>=L||s.y[i]<0)s.y[i]=0;
 }
+function cellOf(rx,ry,nc,kl){ // neighbor cell index (may be off-grid) -> list of cell ids
+ const out=[];const f=(a,b)=>{let x=rx,y=ry;for(const o of [a,b]){if(o==='x'&&(x<0||x>=nc)){x=(x+nc)%nc;if(kl)y=nc-1-y;}if(o==='y'&&(y<0||y>=nc)){y=(y+nc)%nc;if(kl)x=nc-1-x;}}
+  x=(x+nc)%nc;y=(y+nc)%nc;const c=y*nc+x;if(!out.includes(c))out.push(c);};
+ f('x','y');f('y','x');return out;}
 function step(s){
  const {N,x,y,vx,vy,p}=s,{L,R0,d,F0,tau,v0,dt,topo}=p;
  const ax=new Float64Array(N),ay=new Float64Array(N);
@@ -49,11 +55,10 @@ function step(s){
  const pair=(i,j)=>{const [dx,dy]=disp(x[i],y[i],x[j],y[j],L,topo);const r=Math.hypot(dx,dy);
    if(r<R0&&r>1e-12){const f=F0*S(r,R0,d)/r;ax[i]+=f*dx;ay[i]+=f*dy;}};
  if(nc<3){for(let i=0;i<N;i++)for(let j=0;j<N;j++)if(i!==j)pair(i,j);}
- else{const cs=L/nc,head=new Int32Array(nc*nc).fill(-1),next=new Int32Array(N),cx=new Int32Array(N),cy=new Int32Array(N);
+ else{const cs=L/nc,head=new Int32Array(nc*nc).fill(-1),next=new Int32Array(N),cx=new Int32Array(N),cy=new Int32Array(N),kl=topo==='klein';
   for(let i=0;i<N;i++){cx[i]=Math.min(nc-1,Math.floor(x[i]/cs));cy[i]=Math.min(nc-1,Math.floor(y[i]/cs));const c=cy[i]*nc+cx[i];next[i]=head[c];head[c]=i;}
-  for(let i=0;i<N;i++)for(let a=-1;a<=1;a++){let ry=cy[i]+a,mir=false;if(ry<0||ry>=nc){ry=(ry+nc)%nc;mir=topo==='klein';}
-   for(let b=-1;b<=1;b++){let rx=((cx[i]+b)%nc+nc)%nc;if(mir)rx=nc-1-rx;
-    for(let j=head[ry*nc+rx];j>=0;j=next[j])if(j!==i)pair(i,j);}}}
+  for(let i=0;i<N;i++){const cells=[];for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++)for(const c of cellOf(cx[i]+b,cy[i]+a,nc,kl))if(!cells.includes(c))cells.push(c);
+   for(const c of cells)for(let j=head[c];j>=0;j=next[j])if(j!==i)pair(i,j);}}
  for(let i=0;i<N;i++){const sp=Math.hypot(vx[i],vy[i]);
   if(sp>1e-12){const g=(v0-sp)/(tau*sp);ax[i]+=g*vx[i];ay[i]+=g*vy[i];}
   else{const a=Math.random()*2*Math.PI;ax[i]+=v0/tau*Math.cos(a);ay[i]+=v0/tau*Math.sin(a);}
@@ -71,11 +76,11 @@ function reset(){sim=makeSim(params());draw();}
 ['R0','v0','d','tau','F0','dt','topo'].forEach(k=>$(k).onchange=()=>{const n=params();n.N=sim.N;n.L=sim.p.L;sim.p=n;});
 ['N','L'].forEach(k=>$(k).onchange=reset);
 function draw(){const k=cv.width/sim.p.L;ctx.clearRect(0,0,cv.width,cv.height);ctx.strokeStyle='#888';
- if(sim.p.topo==='klein'){ctx.fillStyle='#f55';ctx.fillText('y-edges glued with x-flip',5,12);}
- const r=Math.max(1.5,sim.p.R0*k/2);
- for(let i=0;i<sim.N;i++){const X=sim.x[i]*k,Y=cv.height-sim.y[i]*k,a=Math.atan2(sim.vy[i],sim.vx[i]);
-  ctx.fillStyle=`hsl(${(a*180/Math.PI+360)%360},80%,55%)`;ctx.beginPath();ctx.arc(X,Y,r,0,7);ctx.fill();
-  ctx.beginPath();ctx.moveTo(X,Y);ctx.lineTo(X+2*r*Math.cos(a),Y-2*r*Math.sin(a));ctx.stroke();}
+ if(sim.p.topo==='klein'){ctx.fillStyle='#f55';ctx.fillText('both edges glued with flip (RP²)',5,12);}
+ const r=Math.max(1.5,sim.p.R0*k/2);ctx.fillStyle='#4af';ctx.strokeStyle='#fff';ctx.lineWidth=1;
+ for(let i=0;i<sim.N;i++){const X=sim.x[i]*k,Y=cv.height-sim.y[i]*k,a=Math.atan2(sim.vy[i],sim.vx[i]),c=Math.cos(a),s_=-Math.sin(a),T=X+2*r*c,U=Y+2*r*s_,h=Math.max(2,0.6*r);
+  ctx.beginPath();ctx.arc(X,Y,r,0,7);ctx.fill();
+  ctx.beginPath();ctx.moveTo(X,Y);ctx.lineTo(T,U);ctx.moveTo(T,U);ctx.lineTo(T-h*(c-0.5*s_),U-h*(s_+0.5*c));ctx.moveTo(T,U);ctx.lineTo(T-h*(c+0.5*s_),U-h*(s_-0.5*c));ctx.stroke();}
  const st=stats(sim);$('t').textContent=sim.t.toFixed(2);$('phi').textContent=st.phi.toFixed(3);$('ms').textContent=st.mean.toFixed(3);}
 function loop(){if(run){for(let i=0;i<+$('speed').value;i++)step(sim);draw();}requestAnimationFrame(loop);}
 $('start').onclick=()=>run=true;$('pause').onclick=()=>run=false;$('reset').onclick=reset;reset();loop();
