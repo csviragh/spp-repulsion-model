@@ -10,13 +10,13 @@ label{display:block;margin:6px 0}input[type=number]{width:80px}canvas{background
 <label>tau <input id="tau" type="number" value="1" step="0.1"></label>
 <label>F0 <input id="F0" type="number" value="10" step="1"></label>
 <label>dt <input id="dt" type="number" value="0.01" step="0.005"></label>
-<label>Topology <select id="topo"><option value="torus">Torus</option><option value="klein">Klein bottle</option></select></label>
+<label>Topology <select id="topo"><option value="torus">Torus</option><option value="klein">Klein bottle (both axes flipped)</option><option value="mobius">Möbius strip</option><option value="sphere">Sphere (glued edges)</option></select></label>
 <label>Speed (steps/frame) <input id="speed" type="range" min="1" max="50" value="5"></label>
 <button id="start">Start</button><button id="pause">Pause</button><button id="reset">Reset</button>
 <p>t = <span id="t">0</span><br>Order parameter φ = |⟨v/|v|⟩| = <span id="phi"></span><br>Mean speed ⟨|v|⟩ = <span id="ms"></span></p>
 <div class="f">dx/dt = v<br>dv/dt = (v0-|v|)/τ · v/|v| + Σ F0·S(r_ij)·e_ij<br><br>
 S(r)=[σ((c-r)/w) - σ((c-R0)/w)] / [σ(c/w) - σ((c-R0)/w)]<br>σ(z)=1/(1+e^-z), c=R0-d/2, w=d/4<br>S=0 for r≥R0; d=0 → S=Θ(R0-r)<br>
-S(0)=1, S(R0)=0; d=R0 → ≈ linear<br><br>'Klein bottle' option: both axes flipped —<br>crossing x: y→L-y, vy→-vy; crossing y: x→L-x, vx→-vx<br>(topologically the real projective plane)<br>Semi-implicit Euler, cell list</div>
+S(0)=1, S(R0)=0; d=R0 → ≈ linear<br><br>'Klein bottle' option: both axes flipped —<br>crossing x: y→L-y, vy→-vy; crossing y: x→L-x, vx→-vx<br>(topologically the real projective plane)<br>Möbius: crossing x: y→L-y, vy→-vy; hard reflecting walls at y=0,L<br>Sphere: (0,t)~(t,0), (L,t)~(t,L); flat square with glued edges (topological sphere, not curved); corners (0,0),(L,L) are cone points<br>Semi-implicit Euler, cell list</div>
 </div><canvas id="c" width="800" height="800"></canvas>
 <script id="physics">
 function makeSim(p){
@@ -28,43 +28,64 @@ function makeSim(p){
 const sig=z=>1/(1+Math.exp(-z));
 function S(r,R0,d){ if(r>=R0) return 0; if(d<=1e-9) return 1;
  const c=R0-d/2,w=d/4,lo=sig((c-R0)/w),hi=sig(c/w); return (sig((c-r)/w)-lo)/(hi-lo);}
-// minimum-image displacement from j to i; returns [dx,dy]
-// 'klein' option = both axes flipped: (x,y)~(x±L, L-y) and (x,y)~(L-x, y±L)  (real projective plane)
-function disp(xi,yi,xj,yj,L,topo){
- if(topo==='torus'){let dx=xi-xj,dy=yi-yj;dx-=L*Math.round(dx/L);dy-=L*Math.round(dy/L);return [dx,dy];}
- const G=[[1,0],[-1,0],[0,1],[0,-1]],ap=(p,g)=>g[0]?[p[0]+g[0]*L,L-p[1]]:[L-p[0],p[1]+g[1]*L];
- let best=Infinity,bx=0,by=0;const test=p=>{const dx=xi-p[0],dy=yi-p[1],r2=dx*dx+dy*dy;if(r2<best){best=r2;bx=dx;by=dy;}};
- const p0=[xj,yj];test(p0);for(const g of G){const p1=ap(p0,g);test(p1);for(const h of G)test(ap(p1,h));}
- return [bx,by];
-}
-function wrap(s,i){const L=s.p.L,k=s.p.topo==='klein';
- for(let it=0;it<8;it++){let ch=false;
-  if(s.x[i]<0||s.x[i]>=L){s.x[i]-=L*Math.floor(s.x[i]/L);if(k){s.y[i]=L-s.y[i];s.vy[i]=-s.vy[i];}ch=true;}
-  if(s.y[i]<0||s.y[i]>=L){s.y[i]-=L*Math.floor(s.y[i]/L);if(k){s.x[i]=L-s.x[i];s.vx[i]=-s.vx[i];}ch=true;}
-  if(!ch)break;}
- if(s.x[i]>=L||s.x[i]<0)s.x[i]=0;if(s.y[i]>=L||s.y[i]<0)s.y[i]=0;
-}
-function cellOf(rx,ry,nc,kl){ // neighbor cell index (may be off-grid) -> list of cell ids
- const out=[];const f=(a,b)=>{let x=rx,y=ry;for(const o of [a,b]){if(o==='x'&&(x<0||x>=nc)){x=(x+nc)%nc;if(kl)y=nc-1-y;}if(o==='y'&&(y<0||y>=nc)){y=(y+nc)%nc;if(kl)x=nc-1-x;}}
-  x=(x+nc)%nc;y=(y+nc)%nc;const c=y*nc+x;if(!out.includes(c))out.push(c);};
- f('x','y');f('y','x');return out;}
+// Topologies as groups of isometries p' = A p + b (A orthogonal). Images of j: g(j) for g in G.
+// torus: translations. 'klein' (both axes flipped = RP^2): glide maps. mobius: x-glide only, y hard walls.
+// sphere: flat square, left edge glued to bottom ((0,t)~(t,0)), right edge to top ((L,t)~(t,L)):
+//   gluing maps are +-90 deg rotations about the corners (0,0) and (L,L) (cone points). Topological sphere, not curved.
+const aff=(A,b)=>({A,b});
+function rotAbout(cx,cy,sgn){const A=sgn>0?[0,-1,1,0]:[0,1,-1,0];return aff(A,[cx-(A[0]*cx+A[1]*cy),cy-(A[2]*cx+A[3]*cy)]);}
+function gens(L,topo){
+ if(topo==='torus')return [aff([1,0,0,1],[L,0]),aff([1,0,0,1],[-L,0]),aff([1,0,0,1],[0,L]),aff([1,0,0,1],[0,-L])];
+ if(topo==='klein')return [aff([1,0,0,-1],[L,L]),aff([1,0,0,-1],[-L,L]),aff([-1,0,0,1],[L,L]),aff([-1,0,0,1],[L,-L])];
+ if(topo==='mobius')return [aff([1,0,0,-1],[L,L]),aff([1,0,0,-1],[-L,L])];
+ if(topo==='sphere')return [rotAbout(0,0,1),rotAbout(0,0,-1),rotAbout(L,L,1),rotAbout(L,L,-1)];
+ return [];}
+const comp=(g,h)=>{const A=g.A,B=h.A;return aff([A[0]*B[0]+A[1]*B[2],A[0]*B[1]+A[1]*B[3],A[2]*B[0]+A[3]*B[2],A[2]*B[1]+A[3]*B[3]],
+ [A[0]*h.b[0]+A[1]*h.b[1]+g.b[0],A[2]*h.b[0]+A[3]*h.b[1]+g.b[1]]);};
+const groupCache={};
+function group(L,topo){const k=topo+L;if(groupCache[k])return groupCache[k];
+ const G0=gens(L,topo),out=[aff([1,0,0,1],[0,0])],key=g=>g.A.concat(g.b).map(v=>Math.round(v*1e6)).join(),seen=new Set([key(out[0])]);
+ const add=g=>{const kk=key(g);if(!seen.has(kk)){seen.add(kk);out.push(g);}};
+ for(const g of G0){add(g);for(const h of G0)add(comp(g,h));}
+ return groupCache[k]=out;}
+const ap=(g,x,y)=>[g.A[0]*x+g.A[1]*y+g.b[0],g.A[2]*x+g.A[3]*y+g.b[1]];
+const apInv=(g,x,y)=>{const u=x-g.b[0],w=y-g.b[1];return [g.A[0]*u+g.A[2]*w,g.A[1]*u+g.A[3]*w];};
+// nearest-image displacement from j to i; returns [dx,dy]
+function disp(xi,yi,xj,yj,L,topo){let best=Infinity,bx=0,by=0;
+ for(const g of group(L,topo)){const [X,Y]=ap(g,xj,yj),dx=xi-X,dy=yi-Y,r2=dx*dx+dy*dy;if(r2<best){best=r2;bx=dx;by=dy;}}
+ return [bx,by];}
+function wrap(s,i){const L=s.p.L,t=s.p.topo;let x=s.x[i],y=s.y[i],vx=s.vx[i],vy=s.vy[i],q;
+ for(let it=0;it<10;it++){
+  if(t==='torus'){x-=L*Math.floor(x/L);y-=L*Math.floor(y/L);break;}
+  if(t==='klein'){if(x<0||x>=L){x-=L*Math.floor(x/L);y=L-y;vy=-vy;continue;}if(y<0||y>=L){y-=L*Math.floor(y/L);x=L-x;vx=-vx;continue;}break;}
+  if(t==='mobius'){if(y<0){y=-y;vy=-vy;}if(y>L){y=2*L-y;vy=-vy;}if(x<0||x>=L){x-=L*Math.floor(x/L);y=L-y;vy=-vy;continue;}break;}
+  if(t==='sphere'){ // (x,y)->(y,-x) for x<0 etc.; velocities rotate with the same linear map
+   if(x<0){q=x;x=y;y=-q;q=vx;vx=vy;vy=-q;continue;}
+   if(y<0){q=y;y=x;x=-q;q=vy;vy=vx;vx=-q;continue;}
+   if(x>L){q=x;x=y;y=2*L-q;q=vx;vx=vy;vy=-q;continue;}
+   if(y>L){q=y;y=x;x=2*L-q;q=vy;vy=vx;vx=-q;continue;}
+   break;}
+  break;}
+ const cl=v=>v<0||!isFinite(v)?0:(v>=L?L*(1-1e-12):v);s.x[i]=cl(x);s.y[i]=cl(y);s.vx[i]=vx;s.vy[i]=vy;}
 function step(s){
- const {N,x,y,vx,vy,p}=s,{L,R0,d,F0,tau,v0,dt,topo}=p;
- const ax=new Float64Array(N),ay=new Float64Array(N);
- const nc=Math.floor(L/R0);
- const pair=(i,j)=>{const [dx,dy]=disp(x[i],y[i],x[j],y[j],L,topo);const r=Math.hypot(dx,dy);
-   if(r<R0&&r>1e-12){const f=F0*S(r,R0,d)/r;ax[i]+=f*dx;ay[i]+=f*dy;}};
- if(nc<3){for(let i=0;i<N;i++)for(let j=0;j<N;j++)if(i!==j)pair(i,j);}
- else{const cs=L/nc,head=new Int32Array(nc*nc).fill(-1),next=new Int32Array(N),cx=new Int32Array(N),cy=new Int32Array(N),kl=topo==='klein';
-  for(let i=0;i<N;i++){cx[i]=Math.min(nc-1,Math.floor(x[i]/cs));cy[i]=Math.min(nc-1,Math.floor(y[i]/cs));const c=cy[i]*nc+cx[i];next[i]=head[c];head[c]=i;}
-  for(let i=0;i<N;i++){const cells=[];for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++)for(const c of cellOf(cx[i]+b,cy[i]+a,nc,kl))if(!cells.includes(c))cells.push(c);
-   for(const c of cells)for(let j=head[c];j>=0;j=next[j])if(j!==i)pair(i,j);}}
+ const {N,x,y,vx,vy,p}=s,{L,R0,d,F0,tau,v0,dt,topo}=p,G=group(L,topo);
+ const ax=new Float64Array(N),ay=new Float64Array(N),nc=Math.max(1,Math.floor(L/R0)),cs=L/nc;
+ const head=new Int32Array(nc*nc).fill(-1),next=new Int32Array(N),best=new Float64Array(N),bdx=new Float64Array(N),bdy=new Float64Array(N),stamp=new Int32Array(N).fill(-1),list=new Int32Array(N);
+ for(let i=0;i<N;i++){const c=Math.min(nc-1,Math.floor(y[i]/cs))*nc+Math.min(nc-1,Math.floor(x[i]/cs));next[i]=head[c];head[c]=i;}
+ for(let i=0;i<N;i++){let n=0;
+  for(const g of G){const [qx,qy]=apInv(g,x[i],y[i]); // |i - g(j)| = |g^-1(i) - j|
+   if(qx<-R0||qx>L+R0||qy<-R0||qy>L+R0)continue;
+   const c0=Math.max(0,Math.floor((qx-R0)/cs)),c1=Math.min(nc-1,Math.floor((qx+R0)/cs)),r0=Math.max(0,Math.floor((qy-R0)/cs)),r1=Math.min(nc-1,Math.floor((qy+R0)/cs));
+   for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++)for(let j=head[r*nc+c];j>=0;j=next[j]){if(j===i)continue;
+    const ex=qx-x[j],ey=qy-y[j],r2=ex*ex+ey*ey;if(r2>=R0*R0)continue;
+    if(stamp[j]!==i){stamp[j]=i;list[n++]=j;best[j]=Infinity;}
+    if(r2<best[j]){best[j]=r2;bdx[j]=g.A[0]*ex+g.A[1]*ey;bdy[j]=g.A[2]*ex+g.A[3]*ey;}}} // rotate back to i's frame
+  for(let k=0;k<n;k++){const j=list[k],r=Math.sqrt(best[j]);if(r>1e-12){const f=F0*S(r,R0,d)/r;ax[i]+=f*bdx[j];ay[i]+=f*bdy[j];}}}
  for(let i=0;i<N;i++){const sp=Math.hypot(vx[i],vy[i]);
   if(sp>1e-12){const g=(v0-sp)/(tau*sp);ax[i]+=g*vx[i];ay[i]+=g*vy[i];}
   else{const a=Math.random()*2*Math.PI;ax[i]+=v0/tau*Math.cos(a);ay[i]+=v0/tau*Math.sin(a);}
   vx[i]+=dt*ax[i];vy[i]+=dt*ay[i];x[i]+=dt*vx[i];y[i]+=dt*vy[i];wrap(s,i);}
- s.t+=dt;
-}
+ s.t+=dt;}
 function stats(s){let ux=0,uy=0,m=0;for(let i=0;i<s.N;i++){const sp=Math.hypot(s.vx[i],s.vy[i]);m+=sp;if(sp>0){ux+=s.vx[i]/sp;uy+=s.vy[i]/sp;}}
  return {phi:Math.hypot(ux,uy)/s.N,mean:m/s.N};}
 if(typeof module!=='undefined')module.exports={makeSim,step,stats,S,disp,wrap};
@@ -76,7 +97,7 @@ function reset(){sim=makeSim(params());draw();}
 ['R0','v0','d','tau','F0','dt','topo'].forEach(k=>$(k).onchange=()=>{const n=params();n.N=sim.N;n.L=sim.p.L;sim.p=n;});
 ['N','L'].forEach(k=>$(k).onchange=reset);
 function draw(){const k=cv.width/sim.p.L;ctx.clearRect(0,0,cv.width,cv.height);ctx.strokeStyle='#888';
- if(sim.p.topo==='klein'){ctx.fillStyle='#f55';ctx.fillText('both edges glued with flip (RP²)',5,12);}
+ {const m={klein:'both edges glued with flip (RP²)',mobius:'x glued with flip, y hard walls',sphere:'left~bottom, right~top (topological sphere)'}[sim.p.topo];if(m){ctx.fillStyle='#f55';ctx.fillText(m,5,12);}}
  const r=Math.max(1.5,sim.p.R0*k/2);ctx.fillStyle='#4af';ctx.strokeStyle='#fff';ctx.lineWidth=1;
  for(let i=0;i<sim.N;i++){const X=sim.x[i]*k,Y=cv.height-sim.y[i]*k,a=Math.atan2(sim.vy[i],sim.vx[i]),c=Math.cos(a),s_=-Math.sin(a),T=X+2*r*c,U=Y+2*r*s_,h=Math.max(2,0.6*r);
   ctx.beginPath();ctx.arc(X,Y,r,0,7);ctx.fill();
