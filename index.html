@@ -1,0 +1,82 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>SPP ODE simulator</title>
+<style>body{font-family:sans-serif;margin:0;display:flex;background:#111;color:#ddd}#ui{width:300px;padding:10px;font-size:13px}
+label{display:block;margin:6px 0}input[type=number]{width:80px}canvas{background:#000;margin:10px}button{margin:3px}.f{background:#222;padding:6px;font-family:monospace;font-size:11px}</style></head>
+<body><div id="ui"><h3>Self-propelled particles</h3>
+<label>N <input id="N" type="number" value="500" min="1"></label>
+<label>R0 <input id="R0" type="number" value="1" step="0.1"></label>
+<label>v0 <input id="v0" type="number" value="1" step="0.1"></label>
+<label>d (wall width, 0..R0) <input id="d" type="number" value="0.3" step="0.05"></label>
+<label>L (linear size) <input id="L" type="number" value="30" step="1"></label>
+<label>tau <input id="tau" type="number" value="1" step="0.1"></label>
+<label>F0 <input id="F0" type="number" value="10" step="1"></label>
+<label>dt <input id="dt" type="number" value="0.01" step="0.005"></label>
+<label>Topology <select id="topo"><option value="torus">Torus</option><option value="klein">Klein bottle</option></select></label>
+<label>Speed (steps/frame) <input id="speed" type="range" min="1" max="50" value="5"></label>
+<button id="start">Start</button><button id="pause">Pause</button><button id="reset">Reset</button>
+<p>t = <span id="t">0</span><br>Order parameter φ = |⟨v/|v|⟩| = <span id="phi"></span><br>Mean speed ⟨|v|⟩ = <span id="ms"></span></p>
+<div class="f">dx/dt = v<br>dv/dt = (v0-|v|)/τ · v/|v| + Σ F0·S(r_ij)·e_ij<br><br>
+S(r)=[σ((c-r)/w) - σ((c-R0)/w)] / [σ(c/w) - σ((c-R0)/w)]<br>σ(z)=1/(1+e^-z), c=R0-d/2, w=d/4<br>S=0 for r≥R0; d=0 → S=Θ(R0-r)<br>
+S(0)=1, S(R0)=0; d=R0 → ≈ linear<br><br>Klein: crossing y wall: x→L-x, vx→-vx<br>Semi-implicit Euler, cell list</div>
+</div><canvas id="c" width="800" height="800"></canvas>
+<script id="physics">
+function makeSim(p){
+ const s={p, N:p.N, x:new Float64Array(p.N), y:new Float64Array(p.N), vx:new Float64Array(p.N), vy:new Float64Array(p.N), t:0};
+ const L=p.L;
+ for(let i=0;i<s.N;i++){s.x[i]=Math.random()*L;s.y[i]=Math.random()*L;const a=Math.random()*2*Math.PI,u=Math.random()*2*p.v0;s.vx[i]=u*Math.cos(a);s.vy[i]=u*Math.sin(a);}
+ return s;
+}
+const sig=z=>1/(1+Math.exp(-z));
+function S(r,R0,d){ if(r>=R0) return 0; if(d<=1e-9) return 1;
+ const c=R0-d/2,w=d/4,lo=sig((c-R0)/w),hi=sig(c/w); return (sig((c-r)/w)-lo)/(hi-lo);}
+// minimum-image displacement from j to i; returns [dx,dy]
+function disp(xi,yi,xj,yj,L,topo){
+ let best=Infinity,bx=0,by=0;
+ const cand=(X,Y)=>{let dx=xi-X;dx-=L*Math.round(dx/L);const dy=yi-Y,r2=dx*dx+dy*dy;if(r2<best){best=r2;bx=dx;by=dy;}};
+ if(topo==='torus'){let dx=xi-xj,dy=yi-yj;dx-=L*Math.round(dx/L);dy-=L*Math.round(dy/L);return [dx,dy];}
+ cand(xj,yj); cand(L-xj,yj+L); cand(L-xj,yj-L);
+ return [bx,by];
+}
+function wrap(s,i){const L=s.p.L;
+ s.x[i]-=L*Math.floor(s.x[i]/L);
+ if(s.y[i]>=L||s.y[i]<0){const k=Math.floor(s.y[i]/L);s.y[i]-=k*L;
+  if(s.p.topo==='klein'&&(k&1)){s.x[i]=L-s.x[i];s.vx[i]=-s.vx[i];if(s.x[i]>=L)s.x[i]-=L;}}
+ if(s.x[i]>=L)s.x[i]=0;if(s.y[i]>=L)s.y[i]=0;
+}
+function step(s){
+ const {N,x,y,vx,vy,p}=s,{L,R0,d,F0,tau,v0,dt,topo}=p;
+ const ax=new Float64Array(N),ay=new Float64Array(N);
+ const nc=Math.floor(L/R0);
+ const pair=(i,j)=>{const [dx,dy]=disp(x[i],y[i],x[j],y[j],L,topo);const r=Math.hypot(dx,dy);
+   if(r<R0&&r>1e-12){const f=F0*S(r,R0,d)/r;ax[i]+=f*dx;ay[i]+=f*dy;}};
+ if(nc<3){for(let i=0;i<N;i++)for(let j=0;j<N;j++)if(i!==j)pair(i,j);}
+ else{const cs=L/nc,head=new Int32Array(nc*nc).fill(-1),next=new Int32Array(N),cx=new Int32Array(N),cy=new Int32Array(N);
+  for(let i=0;i<N;i++){cx[i]=Math.min(nc-1,Math.floor(x[i]/cs));cy[i]=Math.min(nc-1,Math.floor(y[i]/cs));const c=cy[i]*nc+cx[i];next[i]=head[c];head[c]=i;}
+  for(let i=0;i<N;i++)for(let a=-1;a<=1;a++){let ry=cy[i]+a,mir=false;if(ry<0||ry>=nc){ry=(ry+nc)%nc;mir=topo==='klein';}
+   for(let b=-1;b<=1;b++){let rx=((cx[i]+b)%nc+nc)%nc;if(mir)rx=nc-1-rx;
+    for(let j=head[ry*nc+rx];j>=0;j=next[j])if(j!==i)pair(i,j);}}}
+ for(let i=0;i<N;i++){const sp=Math.hypot(vx[i],vy[i]);
+  if(sp>1e-12){const g=(v0-sp)/(tau*sp);ax[i]+=g*vx[i];ay[i]+=g*vy[i];}
+  else{const a=Math.random()*2*Math.PI;ax[i]+=v0/tau*Math.cos(a);ay[i]+=v0/tau*Math.sin(a);}
+  vx[i]+=dt*ax[i];vy[i]+=dt*ay[i];x[i]+=dt*vx[i];y[i]+=dt*vy[i];wrap(s,i);}
+ s.t+=dt;
+}
+function stats(s){let ux=0,uy=0,m=0;for(let i=0;i<s.N;i++){const sp=Math.hypot(s.vx[i],s.vy[i]);m+=sp;if(sp>0){ux+=s.vx[i]/sp;uy+=s.vy[i]/sp;}}
+ return {phi:Math.hypot(ux,uy)/s.N,mean:m/s.N};}
+if(typeof module!=='undefined')module.exports={makeSim,step,stats,S,disp,wrap};
+</script>
+<script>
+const $=id=>document.getElementById(id),cv=$('c'),ctx=cv.getContext('2d');let sim,run=false;
+function params(){return{N:+$('N').value|0,R0:+$('R0').value,v0:+$('v0').value,d:Math.min(+$('d').value,+$('R0').value),L:+$('L').value,tau:+$('tau').value,F0:+$('F0').value,dt:+$('dt').value,topo:$('topo').value};}
+function reset(){sim=makeSim(params());draw();}
+['R0','v0','d','tau','F0','dt','topo'].forEach(k=>$(k).onchange=()=>{const n=params();n.N=sim.N;n.L=sim.p.L;sim.p=n;});
+['N','L'].forEach(k=>$(k).onchange=reset);
+function draw(){const k=cv.width/sim.p.L;ctx.clearRect(0,0,cv.width,cv.height);ctx.strokeStyle='#888';
+ if(sim.p.topo==='klein'){ctx.fillStyle='#f55';ctx.fillText('y-edges glued with x-flip',5,12);}
+ const r=Math.max(1.5,sim.p.R0*k/2);
+ for(let i=0;i<sim.N;i++){const X=sim.x[i]*k,Y=cv.height-sim.y[i]*k,a=Math.atan2(sim.vy[i],sim.vx[i]);
+  ctx.fillStyle=`hsl(${(a*180/Math.PI+360)%360},80%,55%)`;ctx.beginPath();ctx.arc(X,Y,r,0,7);ctx.fill();
+  ctx.beginPath();ctx.moveTo(X,Y);ctx.lineTo(X+2*r*Math.cos(a),Y-2*r*Math.sin(a));ctx.stroke();}
+ const st=stats(sim);$('t').textContent=sim.t.toFixed(2);$('phi').textContent=st.phi.toFixed(3);$('ms').textContent=st.mean.toFixed(3);}
+function loop(){if(run){for(let i=0;i<+$('speed').value;i++)step(sim);draw();}requestAnimationFrame(loop);}
+$('start').onclick=()=>run=true;$('pause').onclick=()=>run=false;$('reset').onclick=reset;reset();loop();
+</script></body></html>
