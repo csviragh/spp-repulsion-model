@@ -11,13 +11,15 @@ label{display:block;margin:6px 0}input[type=number]{width:80px}canvas{background
 <label>F0 <input id="F0" type="number" value="10" step="1"></label>
 <label>dt <input id="dt" type="number" value="0.01" step="0.005"></label>
 <label>Topology <select id="topo"><option value="torus">Torus</option><option value="klein">Klein bottle (both axes flipped)</option><option value="mobius">Möbius strip</option><option value="sphere">Sphere (glued edges)</option></select></label>
+<label>Delay <select id="delay"><option value="none">None</option><option value="const">Constant delay</option><option value="ret">Retarded</option></select></label>
+<label id="tdelbox" style="display:none">t_del <input id="tdel" type="number" value="0.5" step="0.1" min="0"></label><label id="vintbox" style="display:none">v_int <input id="vint" type="number" value="5" step="0.5" min="0.01"></label><div id="histwarn" style="color:#f80;display:none">⚠ delay history capped (N×steps too large); earliest stored position used</div>
 <div id="corbox" style="display:none"><label><input type="checkbox" id="coriolis" checked> Coriolis force</label><label>Ω (rotation rate) <input id="Omega" type="number" value="0.5" step="0.1"></label></div>
 <label>Speed (steps/frame) <input id="speed" type="range" min="1" max="50" value="5"></label>
 <button id="start">Start</button><button id="pause">Pause</button><button id="reset">Reset</button>
 <p>t = <span id="t">0</span><br>Order parameter φ = |⟨v/|v|⟩| = <span id="phi"></span><br>Mean speed ⟨|v|⟩ = <span id="ms"></span></p>
 <div class="f">dx/dt = v<br>dv/dt = (v0-|v|)/τ · v/|v| + Σ F0·S(r_ij)·e_ij<br><br>
 S(r)=[σ((c-r)/w) - σ((c-R0)/w)] / [σ(c/w) - σ((c-R0)/w)]<br>σ(z)=1/(1+e^-z), c=R0-d/2, w=d/4<br>S=0 for r≥R0; d=0 → S=Θ(R0-r)<br>
-S(0)=1, S(R0)=0; d=R0 → ≈ linear<br><br>'Klein bottle' option: both axes flipped —<br>crossing x: y→L-y, vy→-vy; crossing y: x→L-x, vx→-vx<br>(topologically the real projective plane)<br>Möbius: crossing x: y→L-y, vy→-vy; hard reflecting walls at y=0,L<br>Coriolis (sphere, optional): v rotated by angle 2Ω·sin(lat)·dt per step, lat=π/2−π(x+y)/(2L); north pole = (0,0); rightward deflection in north (seen from outside); no work<br>Sphere: (0,t)~(t,0), (L,t)~(t,L); flat square with glued edges (topological sphere, not curved); corners (0,0),(L,L) are cone points<br>Semi-implicit Euler, cell list</div>
+S(0)=1, S(R0)=0; d=R0 → ≈ linear<br><br>'Klein bottle' option: both axes flipped —<br>crossing x: y→L-y, vy→-vy; crossing y: x→L-x, vx→-vx<br>(topologically the real projective plane)<br>Möbius: crossing x: y→L-y, vy→-vy; hard reflecting walls at y=0,L<br>Coriolis (sphere, optional): v rotated by angle 2Ω·sin(lat)·dt per step, lat=π/2−π(x+y)/(2L); north pole = (0,0); rightward deflection in north (seen from outside); no work<br>Sphere: (0,t)~(t,0), (L,t)~(t,L); flat square with glued edges (topological sphere, not curved); corners (0,0),(L,L) are cone points<br>Delay (optional): i uses its current position, j a delayed one:<br>constant: x_j(t−t_del); retarded: x_j(t−τ_ij) with |x_i(t)−x_j(t−τ_ij)| = v_int·τ_ij (bisection, linear interp. of stored steps); before history fills, earliest stored position<br>Semi-implicit Euler, cell list</div>
 </div><canvas id="c" width="800" height="800"></canvas><canvas id="c3" width="600" height="600" style="display:none;cursor:grab"></canvas>
 <script id="physics">
 function makeSim(p){
@@ -68,17 +70,46 @@ function wrap(s,i){const L=s.p.L,t=s.p.topo;let x=s.x[i],y=s.y[i],vx=s.vx[i],vy=
    break;}
   break;}
  const cl=v=>v<0||!isFinite(v)?0:(v>=L?L*(1-1e-12):v);s.x[i]=cl(x);s.y[i]=cl(y);s.vx[i]=vx;s.vy[i]=vy;}
+// ---- Delay: ring buffer of positions; entry k steps back = position at time t - k*dt ----
+const HIST_MAX=4e6; // max N*steps stored
+function histNeed(p){if(p.delay==='const')return Math.ceil((p.tdel||0)/p.dt)+2;
+ if(p.delay==='ret')return isFinite(p.vint)&&p.vint>0?Math.ceil(p.R0/p.vint/p.dt)+3:2;return 1;}
+function pushHist(s){const N=s.N,p=s.p;let need=histNeed(p),capped=false;const lim=Math.max(2,Math.floor(HIST_MAX/N));if(need>lim){need=lim;capped=true;}s.histCapped=capped;
+ let h=s.hist;if(!h||h.cap!==need){const nh={cap:need,head:-1,count:0,x:new Float64Array(need*N),y:new Float64Array(need*N),vm:new Float64Array(need)};
+  if(h){const m=Math.min(h.count,need);for(let k=m-1;k>=0;k--){const src=((h.head-k)%h.cap+h.cap)%h.cap;nh.head=(nh.head+1)%need;nh.x.set(h.x.subarray(src*N,src*N+N),nh.head*N);nh.y.set(h.y.subarray(src*N,src*N+N),nh.head*N);nh.vm[nh.head]=h.vm[src];nh.count++;}}
+  s.hist=h=nh;}
+ h.head=(h.head+1)%h.cap;h.count=Math.min(h.count+1,h.cap);h.x.set(s.x,h.head*N);h.y.set(s.y,h.head*N);
+ let vm=0;for(let i=0;i<N;i++)vm=Math.max(vm,Math.hypot(s.vx[i],s.vy[i]));h.vm[h.head]=vm;}
+// position of j, kb (fractional) steps back; clamped to earliest available; linear interp unless the step wrapped (jump > L/2 -> nearest)
+function histPos(s,j,kb){const h=s.hist,N=s.N;if(kb<0)kb=0;if(kb>h.count-1)kb=h.count-1;const k0=Math.floor(kb),fr=kb-k0;
+ const i0=((h.head-k0)%h.cap+h.cap)%h.cap,x0=h.x[i0*N+j],y0=h.y[i0*N+j];if(fr<1e-12||k0+1>h.count-1)return [x0,y0];
+ const i1=((h.head-k0-1)%h.cap+h.cap)%h.cap,x1=h.x[i1*N+j],y1=h.y[i1*N+j];
+ if(Math.abs(x1-x0)>s.p.L/2||Math.abs(y1-y0)>s.p.L/2)return fr<0.5?[x0,y0]:[x1,y1];return [x0+fr*(x1-x0),y0+fr*(y1-y0)];}
+// retarded: solve |q - x_j(t-tau)| = vint*tau by bisection on tau in [0, tmax]
+// returns -1 if the root exceeds R0/v_int (then distance > R0: no force)
+function solveTau(s,j,qx,qy){const p=s.p;if(!(isFinite(p.vint)&&p.vint>0))return 0;const dt=p.dt,hmax=(s.hist.count-1)*dt,T=p.R0/p.vint,tmax=Math.min(hmax,T);
+ const gfn=t=>{const [X,Y]=histPos(s,j,t/dt);return Math.hypot(qx-X,qy-Y)-p.vint*t;};
+ if(gfn(0)<=0)return 0;if(gfn(tmax)>0)return tmax>=T?-1:tmax; // history too short: earliest available
+ let lo=0,hi=tmax;for(let it=0;it<30;it++){const m=0.5*(lo+hi);if(gfn(m)>0)lo=m;else hi=m;}return 0.5*(lo+hi);}
 function step(s){
- const {N,x,y,vx,vy,p}=s,{L,R0,d,F0,tau,v0,dt,topo}=p,G=group(L,topo);
+ const {N,x,y,vx,vy,p}=s,{L,R0,d,F0,tau,v0,dt,topo}=p,G=group(L,topo),mode=p.delay||'none';
+ pushHist(s);
  const ax=new Float64Array(N),ay=new Float64Array(N),nc=Math.max(1,Math.floor(L/R0)),cs=L/nc;
+ // positions used for the cell list: delayed (const) or current (none/ret, with enlarged radius for ret)
+ let CX=x,CY=y,Rs=R0;
+ if(mode==='const'&&p.tdel>0){CX=new Float64Array(N);CY=new Float64Array(N);const kb=p.tdel/dt;for(let j=0;j<N;j++){const q=histPos(s,j,kb);CX[j]=q[0];CY[j]=q[1];}}
+ const ret=mode==='ret'&&isFinite(p.vint)&&p.vint>0;
+ if(ret){const h=s.hist;let vm=0;for(let k=0;k<h.count;k++)vm=Math.max(vm,h.vm[k]);Rs=R0+vm*Math.min(R0/p.vint,(h.count-1)*dt)+1e-9;}
  const head=new Int32Array(nc*nc).fill(-1),next=new Int32Array(N),best=new Float64Array(N),bdx=new Float64Array(N),bdy=new Float64Array(N),stamp=new Int32Array(N).fill(-1),list=new Int32Array(N);
- for(let i=0;i<N;i++){const c=Math.min(nc-1,Math.floor(y[i]/cs))*nc+Math.min(nc-1,Math.floor(x[i]/cs));next[i]=head[c];head[c]=i;}
+ for(let i=0;i<N;i++){const c=Math.min(nc-1,Math.floor(CY[i]/cs))*nc+Math.min(nc-1,Math.floor(CX[i]/cs));next[i]=head[c];head[c]=i;}
  for(let i=0;i<N;i++){let n=0;
-  for(const g of G){const [qx,qy]=apInv(g,x[i],y[i]); // |i - g(j)| = |g^-1(i) - j|
-   if(qx<-R0||qx>L+R0||qy<-R0||qy>L+R0)continue;
-   const c0=Math.max(0,Math.floor((qx-R0)/cs)),c1=Math.min(nc-1,Math.floor((qx+R0)/cs)),r0=Math.max(0,Math.floor((qy-R0)/cs)),r1=Math.min(nc-1,Math.floor((qy+R0)/cs));
+  for(const g of G){const [qx,qy]=apInv(g,x[i],y[i]); // |x_i - g(x_j)| = |g^-1(x_i) - x_j| ; i uses its CURRENT position
+   if(qx<-Rs||qx>L+Rs||qy<-Rs||qy>L+Rs)continue;
+   const c0=Math.max(0,Math.floor((qx-Rs)/cs)),c1=Math.min(nc-1,Math.floor((qx+Rs)/cs)),r0=Math.max(0,Math.floor((qy-Rs)/cs)),r1=Math.min(nc-1,Math.floor((qy+Rs)/cs));
    for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++)for(let j=head[r*nc+c];j>=0;j=next[j]){if(j===i)continue;
-    const ex=qx-x[j],ey=qy-y[j],r2=ex*ex+ey*ey;if(r2>=R0*R0)continue;
+    let ex=qx-CX[j],ey=qy-CY[j],r2=ex*ex+ey*ey;if(r2>=Rs*Rs)continue;
+    if(ret){const tj=solveTau(s,j,qx,qy);if(tj<0)continue;const P=histPos(s,j,tj/dt);ex=qx-P[0];ey=qy-P[1];r2=ex*ex+ey*ey;}
+    if(r2>=R0*R0)continue;
     if(stamp[j]!==i){stamp[j]=i;list[n++]=j;best[j]=Infinity;}
     if(r2<best[j]){best[j]=r2;bdx[j]=g.A[0]*ex+g.A[1]*ey;bdy[j]=g.A[2]*ex+g.A[3]*ey;}}} // rotate back to i's frame
   for(let k=0;k<n;k++){const j=list[k],r=Math.sqrt(best[j]);if(r>1e-12){const f=F0*S(r,R0,d)/r;ax[i]+=f*bdx[j];ay[i]+=f*bdy[j];}}}
@@ -101,14 +132,14 @@ function sphereMap(x,y,L){const sm=x+y,th=Math.PI*sm/(2*L);let ph;
 function sphereTangent(x,y,vx,vy,L){const sp=Math.hypot(vx,vy)||1,h=1e-4*L,ux=vx/sp,uy=vy/sp;let sg=1,X=x+h*ux,Y=y+h*uy;
  if(X<0||X>L||Y<0||Y>L){X=x-h*ux;Y=y-h*uy;sg=-1;}const a=sphereMap(x,y,L),b=sphereMap(X,Y,L),t=[sg*(b[0]-a[0]),sg*(b[1]-a[1]),sg*(b[2]-a[2])],n=Math.hypot(...t)||1;
  return t.map(v=>v/n);}
-if(typeof module!=='undefined')module.exports={sphereMap,sphereTangent,makeSim,step,stats,S,disp,wrap};
+if(typeof module!=='undefined')module.exports={histPos,solveTau,pushHist,sphereMap,sphereTangent,makeSim,step,stats,S,disp,wrap};
 </script>
 <script>
 const $=id=>document.getElementById(id),cv=$('c'),ctx=cv.getContext('2d');let sim,run=false;
-function params(){return{N:+$('N').value|0,R0:+$('R0').value,v0:+$('v0').value,d:Math.min(+$('d').value,+$('R0').value),L:+$('L').value,tau:+$('tau').value,F0:+$('F0').value,dt:+$('dt').value,topo:$('topo').value,coriolis:$('coriolis').checked,Omega:+$('Omega').value};}
-function showCor(){$('corbox').style.display=$('topo').value==='sphere'?'':'none';}
+function params(){return{N:+$('N').value|0,R0:+$('R0').value,v0:+$('v0').value,d:Math.min(+$('d').value,+$('R0').value),L:+$('L').value,tau:+$('tau').value,F0:+$('F0').value,dt:+$('dt').value,topo:$('topo').value,coriolis:$('coriolis').checked,Omega:+$('Omega').value,delay:$('delay').value,tdel:+$('tdel').value,vint:+$('vint').value};}
+function showCor(){const dm=$('delay').value;$('tdelbox').style.display=dm==='const'?'':'none';$('vintbox').style.display=dm==='ret'?'':'none';$('corbox').style.display=$('topo').value==='sphere'?'':'none';}
 function reset(){sim=makeSim(params());draw();}
-['R0','v0','d','tau','F0','dt','topo','coriolis','Omega'].forEach(k=>$(k).onchange=()=>{showCor();const n=params();n.N=sim.N;n.L=sim.p.L;sim.p=n;});
+['R0','v0','d','tau','F0','dt','topo','coriolis','Omega','delay','tdel','vint'].forEach(k=>$(k).onchange=()=>{showCor();const n=params();n.N=sim.N;n.L=sim.p.L;sim.p=n;});
 ['N','L'].forEach(k=>$(k).onchange=reset);
 function draw(){const k=cv.width/sim.p.L;ctx.clearRect(0,0,cv.width,cv.height);ctx.strokeStyle='#888';
  {const m={klein:'both edges glued with flip (RP²)',mobius:'x glued with flip, y hard walls',sphere:'left~bottom, right~top (topological sphere)'}[sim.p.topo];if(m){ctx.fillStyle='#f55';ctx.fillText(m,5,12);}}
@@ -116,7 +147,7 @@ function draw(){const k=cv.width/sim.p.L;ctx.clearRect(0,0,cv.width,cv.height);c
  for(let i=0;i<sim.N;i++){const X=sim.x[i]*k,Y=cv.height-sim.y[i]*k,a=Math.atan2(sim.vy[i],sim.vx[i]),c=Math.cos(a),s_=-Math.sin(a),T=X+2*r*c,U=Y+2*r*s_,h=Math.max(2,0.6*r);
   ctx.beginPath();ctx.arc(X,Y,r,0,7);ctx.fill();
   ctx.beginPath();ctx.moveTo(X,Y);ctx.lineTo(T,U);ctx.moveTo(T,U);ctx.lineTo(T-h*(c-0.5*s_),U-h*(s_+0.5*c));ctx.moveTo(T,U);ctx.lineTo(T-h*(c+0.5*s_),U-h*(s_-0.5*c));ctx.stroke();}
- const st=stats(sim);$('t').textContent=sim.t.toFixed(2);$('phi').textContent=st.phi.toFixed(3);$('ms').textContent=st.mean.toFixed(3);}
+ $('histwarn').style.display=sim.histCapped?'':'none';const st=stats(sim);$('t').textContent=sim.t.toFixed(2);$('phi').textContent=st.phi.toFixed(3);$('ms').textContent=st.mean.toFixed(3);}
 function loop(){if(run){for(let i=0;i<+$('speed').value;i++)step(sim);draw();}requestAnimationFrame(loop);}
 const c3=$('c3'),g3=c3.getContext('2d');let rotA=0.5,rotB=0.3,drag=null;
 c3.onmousedown=e=>drag=[e.clientX,e.clientY];window.onmouseup=()=>drag=null;

@@ -25,6 +25,14 @@ For the sphere option a rotatable 3D view (plain canvas, no dependencies) shows 
 ### Coriolis force (sphere only, toggle + Ω input)
 Rotation axis = polar axis of the 3D map (north pole = cone point (0,0)). f = 2Ω·sin(lat), lat = π/2 − π(x+y)/(2L). Each step the velocity is rotated exactly by angle f·dt (so the force does no work; speed unchanged). The square→S² map is orientation-reversing, so a CCW rotation in square coordinates is a rightward (clockwise seen from outside) deflection on the sphere in the north; it reverses in the south. Uses the flat-square metric (not the true sphere metric); gluing maps are rotations, so the deflection is consistent across glued edges.
 
+### Delayed interactions (all topologies)
+Delay mode: None / Constant delay (t_del) / Retarded (v_int). Choice: agent i always uses its **current** position; only the neighbour's position is delayed (perception delay).
+- Constant: F_i(t) = Σ_j F0·S(|x_i(t) − x_j(t − t_del)|)·e_ij.
+- Retarded: τ_ij solves |x_i(t) − x_j(t − τ_ij)| = v_int·τ_ij (bisection; history linearly interpolated between stored steps, nearest step if the agent wrapped in that step). Only τ < R0/v_int can produce a force, so the buffer holds R0/(v_int·dt) steps.
+- Nearest image: the gluing maps are applied to the delayed position (all images checked, as for current positions).
+- Neighbour search: constant delay builds the cell list from delayed positions; retarded uses current positions with radius R0 + v_max·R0/v_int (v_max over the stored history).
+- History: ring buffer of positions per step, resized when delay parameters change mid-run; until it fills, the earliest stored position is used. Capped at N×steps ≤ 4·10⁶ (UI warning when capped).
+
 ## Numerics
 Semi-implicit Euler, adjustable dt, cell list for O(N) neighbor search.
 

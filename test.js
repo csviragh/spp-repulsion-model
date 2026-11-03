@@ -1,6 +1,6 @@
 const fs=require('fs');const h=fs.readFileSync(__dirname+'/index.html','utf8');
 const code=h.match(/<script id="physics">([\s\S]*?)<\/script>/)[1];const m={exports:{}};new Function('module',code)(m);
-const {sphereMap,sphereTangent,makeSim,step,stats,S,disp}=m.exports;
+const {histPos,solveTau,pushHist,sphereMap,sphereTangent,makeSim,step,stats,S,disp}=m.exports;
 // 1 no interaction
 let s=makeSim({N:200,L:50,R0:1,v0:1.5,d:0.3,F0:0,tau:1,dt:0.01,topo:'torus'});for(let i=0;i<1500;i++)step(s);
 let mx=0;for(let i=0;i<s.N;i++)mx=Math.max(mx,Math.abs(Math.hypot(s.vx[i],s.vy[i])-1.5));console.log('speed max dev from v0:',mx);
@@ -57,3 +57,21 @@ console.log('coriolis equator (3,7):',cor(3,7,0.7071,-0.7071,1),'expect turn~0')
 // right-turn check in 3D: t_v x t_a should be -n (clockwise from outside) in north
 {const x=2,y=2,vx=0.7071,vy=-0.7071,n=sphereMap(x,y,10),a=sphereTangent(x,y,vx,vy,10),b=sphereTangent(x,y,-vy,vx,10);const c=[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
  console.log('3D: (v x a_coriolis)·n in north =',(c[0]*n[0]+c[1]*n[1]+c[2]*n[2]).toFixed(3),'expect <0 (rightward)');}
+
+// ---- delay tests ----
+const base={N:300,L:20,R0:1,v0:1,d:0.3,F0:10,tau:1,dt:0.01,topo:'torus'};
+const clone=(s,p)=>{const c=makeSim(Object.assign({},base,p));for(const k of ['x','y','vx','vy'])c[k].set(s[k]);return c;};
+{const s0=makeSim(base),a=clone(s0,{}),b=clone(s0,{delay:'const',tdel:0}),c=clone(s0,{delay:'ret',vint:Infinity});
+ for(let k=0;k<300;k++){step(a);step(b);step(c);}let eb=0,ec=0;for(let i=0;i<300;i++){eb=Math.max(eb,Math.abs(a.x[i]-b.x[i])+Math.abs(a.vx[i]-b.vx[i]));ec=Math.max(ec,Math.abs(a.x[i]-c.x[i])+Math.abs(a.vx[i]-c.vx[i]));}
+ console.log('delay: t_del=0 vs none max diff',eb,'; v_int=inf vs none max diff',ec,'(expect 0)');}
+{const s=makeSim(Object.assign({},base,{delay:'const',tdel:0.07}));const snaps=[];for(let k=0;k<50;k++){snaps.push(Float64Array.from(s.x));step(s);}
+ // after 50 steps, history head = position at step 49 start; 7 steps back = snaps[42]
+ let e=0;for(let j=0;j<300;j++)e=Math.max(e,Math.abs(histPos(s,j,7)[0]-snaps[42][j]));console.log('delay: const k*dt buffer lookup max err',e,'(expect 0)');}
+{const s=makeSim(Object.assign({},base,{delay:'ret',vint:3}));for(let k=0;k<100;k++)step(s);let e=0,m=0;
+ let cnt=0;for(let k=0;k<300;k++){const j=k;if(s.x[j]<3||s.x[j]>17||s.y[j]<3||s.y[j]>17)continue;const qx=s.x[j]+0.5*Math.cos(k),qy=s.y[j]+0.5*Math.sin(k),t=solveTau(s,j,qx,qy);if(t<0)continue;cnt++;const P=histPos(s,j,t/0.01);e=Math.max(e,Math.abs(Math.hypot(qx-P[0],qy-P[1])-3*t));m=Math.max(m,t);}
+ console.log('delay: retarded |dist - v_int*tau| max',e.toExponential(2),'max tau',m.toFixed(3),'pairs',cnt);}
+for(const topo of ['torus','klein','mobius','sphere'])for(const dl of [{delay:'const',tdel:0.5},{delay:'ret',vint:2}]){
+ const s=makeSim({N:1500,L:40,R0:1,v0:1,d:0.3,F0:10,tau:1,dt:0.01,topo,coriolis:true,Omega:0.5,...dl});const t0=Date.now();for(let k=0;k<200;k++)step(s);
+ if(dl.delay==='const')s.p.tdel=1.0;else s.p.vint=1;for(let k=0;k<50;k++)step(s); // mid-run resize
+ let bad=0;for(let i=0;i<s.N;i++)if(!isFinite(s.x[i]+s.y[i]+s.vx[i]+s.vy[i])||s.x[i]<0||s.x[i]>=40||s.y[i]<0||s.y[i]>=40)bad++;
+ console.log('delay',topo,dl.delay,'N=1500',((Date.now()-t0)/250).toFixed(1)+'ms/step bad:',bad,'mean speed',stats(s).mean.toFixed(3));}
